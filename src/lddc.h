@@ -92,6 +92,10 @@ class Lddc final {
 
   // void SetRosPub(ros::Publisher *pub) { global_pub_ = pub; };  // NOT USED
   void SetPublishFrq(uint32_t frq) { publish_frq_ = frq; }
+#ifdef BUILDING_ROS2
+  // the cloud of SetFullCloudCallback on livox/lidar_with_no_return (PointCloud2, the livox/lidar layout)
+  void PublishFullCloud(const StoragePacket& pkg);
+#endif
 
  public:
   Lds *lds_;
@@ -153,6 +157,7 @@ class Lddc final {
   PublisherPtr global_pub_;
   PublisherPtr private_imu_pub_[kMaxSourceLidar];
   PublisherPtr global_imu_pub_;
+  PublisherPtr full_cloud_pub_;
 #endif
 
   livox_ros::DriverNode *cur_node_;

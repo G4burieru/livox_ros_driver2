@@ -161,6 +161,25 @@ void PubHandler::PublishPointCloud() {
   return;
 }
 
+static std::atomic<double> g_no_return_range{0.0};
+static FullCloudCallback g_full_cloud_cb;
+
+void SetNoReturnRange(double range_m) { g_no_return_range.store(range_m > 0.0 ? range_m : 0.0); }
+
+void SetFullCloudCallback(FullCloudCallback cb) { g_full_cloud_cb = std::move(cb); }
+
+static void PublishFullCloud(LidarPubHandler& handler, uint32_t handle) {
+  if (!g_full_cloud_cb) return;
+  StoragePacket pkg;
+  handler.GetFullPointClouds(pkg.points);
+  if (pkg.points.empty()) return;
+  pkg.lidar_type = LidarProtoType::kLivoxLidarType;
+  pkg.handle = handle;
+  pkg.base_time = pkg.points.front().offset_time;  // GetLidarBaseTime() is 0 here: GetLidarPointClouds already swapped its buffer out
+  pkg.points_num = pkg.points.size();
+  g_full_cloud_cb(pkg);
+}
+
 void PubHandler::CheckTimer(uint32_t id) {
 
   if (PubHandler::is_timestamp_sync_.load()) { // Enable time synchronization
@@ -178,6 +197,7 @@ void PubHandler::CheckTimer(uint32_t id) {
     frame_.base_time[frame_.lidar_num] = process_handler->GetLidarBaseTime();
     points_[id].clear();
     process_handler->GetLidarPointClouds(points_[id]);
+    PublishFullCloud(*process_handler, id);
     if (points_[id].empty()) {
       return;
     }
@@ -210,6 +230,7 @@ void PubHandler::CheckTimer(uint32_t id) {
       uint32_t handle = process_handler.first;
       points_[handle].clear();
       process_handler.second->GetLidarPointClouds(points_[handle]);
+      PublishFullCloud(*process_handler.second, handle);
       if (points_[handle].empty()) {
         continue;
       }
@@ -288,6 +309,12 @@ uint64_t LidarPubHandler::GetLidarBaseTime() {
 void LidarPubHandler::GetLidarPointClouds(std::vector<PointXyzlt>& points_clouds) {
   std::lock_guard<std::mutex> lock(mutex_);
   points_clouds.swap(points_clouds_);
+}
+
+void LidarPubHandler::GetFullPointClouds(std::vector<PointXyzlt>& points_clouds) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  points_clouds.swap(full_points_);
+  full_points_.clear();
 }
 
 uint64_t LidarPubHandler::GetRecentTimeStamp() {
@@ -425,28 +452,31 @@ void LidarPubHandler::ProcessCartesianLowPoint(RawPacket & pkt) {
 void LidarPubHandler::ProcessSphericalPoint(RawPacket& pkt) {
   LivoxLidarSpherPoint* raw = (LivoxLidarSpherPoint*)pkt.raw_data.data();
   PointXyzlt point = {};
+  const double no_return_range = g_no_return_range.load();
   for (uint32_t i = 0; i < pkt.point_num; i++) {
-    double radius = raw[i].depth / 1000.0;
     double theta = raw[i].theta / 100.0 / 180 * PI;
     double phi = raw[i].phi / 100.0 / 180 * PI;
-    double src_x = radius * sin(theta) * cos(phi);
-    double src_y = radius * sin(theta) * sin(phi);
-    double src_z = radius * cos(theta);
-    if (pkt.extrinsic_enable) {
-      point.x = src_x;
-      point.y = src_y;
-      point.z = src_z;
-    } else {
-      point.x = src_x * extrinsic_.rotation[0][0] +
-                src_y * extrinsic_.rotation[0][1] +
-                src_z * extrinsic_.rotation[0][2] + (extrinsic_.trans[0] / 1000.0);
-      point.y = src_x * extrinsic_.rotation[1][0] +
-                src_y * extrinsic_.rotation[1][1] +
-                src_z * extrinsic_.rotation[1][2] + (extrinsic_.trans[1] / 1000.0);
-      point.z = src_x * extrinsic_.rotation[2][0] +
-                src_y * extrinsic_.rotation[2][1] +
-                src_z * extrinsic_.rotation[2][2] + (extrinsic_.trans[2] / 1000.0);
-    }
+    auto set_xyz = [&](PointXyzlt& p, double radius) {
+      double src_x = radius * sin(theta) * cos(phi);
+      double src_y = radius * sin(theta) * sin(phi);
+      double src_z = radius * cos(theta);
+      if (pkt.extrinsic_enable) {
+        p.x = src_x;
+        p.y = src_y;
+        p.z = src_z;
+      } else {
+        p.x = src_x * extrinsic_.rotation[0][0] +
+              src_y * extrinsic_.rotation[0][1] +
+              src_z * extrinsic_.rotation[0][2] + (extrinsic_.trans[0] / 1000.0);
+        p.y = src_x * extrinsic_.rotation[1][0] +
+              src_y * extrinsic_.rotation[1][1] +
+              src_z * extrinsic_.rotation[1][2] + (extrinsic_.trans[1] / 1000.0);
+        p.z = src_x * extrinsic_.rotation[2][0] +
+              src_y * extrinsic_.rotation[2][1] +
+              src_z * extrinsic_.rotation[2][2] + (extrinsic_.trans[2] / 1000.0);
+      }
+    };
+    set_xyz(point, raw[i].depth / 1000.0);
 
     point.intensity = raw[i].reflectivity;
     point.line = i % pkt.line_num;
@@ -454,6 +484,10 @@ void LidarPubHandler::ProcessSphericalPoint(RawPacket& pkt) {
     point.offset_time = pkt.time_stamp + i * pkt.point_interval;
     std::lock_guard<std::mutex> lock(mutex_);
     points_clouds_.push_back(point);
+    if (no_return_range > 0.0) {
+      full_points_.push_back(point);
+      if (raw[i].depth == 0) set_xyz(full_points_.back(), no_return_range);  // no return: along its ray
+    }
   }
 }
 

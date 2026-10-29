@@ -351,6 +351,19 @@ void Lddc::PublishPointcloud2Data(const uint8_t index, const uint64_t timestamp,
   }
 }
 
+#ifdef BUILDING_ROS2
+void Lddc::PublishFullCloud(const StoragePacket& pkg) {
+  if (!full_cloud_pub_) {  // only the point thread calls this
+    std::string topic_name("livox/lidar_with_no_return");
+    full_cloud_pub_ = CreatePublisher(kPointCloud2Msg, topic_name, 10);
+  }
+  PointCloud2 cloud;
+  uint64_t timestamp = 0;
+  InitPointcloud2Msg(pkg, cloud, timestamp);
+  std::dynamic_pointer_cast<Publisher<PointCloud2>>(full_cloud_pub_)->publish(cloud);
+}
+#endif
+
 void Lddc::InitCustomMsg(CustomMsg& livox_msg, const StoragePacket& pkg, uint8_t index) {
   livox_msg.header.frame_id.assign(frame_id_);
 

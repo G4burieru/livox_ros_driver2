@@ -6,6 +6,29 @@ Livox ROS Driver 2 is the 2nd-generation driver package used to connect LiDAR pr
 
   As a debugging tool, Livox ROS Driver is not recommended for mass production but limited to test scenarios. You should optimize the code based on the original source to meet your various needs.
 
+## Fork note: no-return shots as a separate cloud (ROS2, Mid-360)
+
+With no object within range, the Mid-360 sends the shot as (0, 0, 0) in Cartesian coordinates and as (0, θ, φ) in
+spherical coordinates (Livox Mid-360 User Manual v1.2, 2023.06, p. 15). Upstream converts the spherical point with
+radius 0, so the direction of these shots is lost. This fork keeps it, so that a mapping or planning node can treat
+open sky as free space instead of unknown.
+
+- New parameter `no_return_range` (m, default `0.0`: nothing changes, upstream behaviour).
+- With `no_return_range > 0` and `"pcl_data_type": 3` (spherical; not supported by the Mid-360L) in the user config,
+  a second `PointCloud2` per frame is published on `livox/lidar_with_no_return`: the same points, layout, frame and
+  stamp as `livox/lidar`, except the no-return shots, placed at `no_return_range` along their ray.
+- `livox/lidar` is never changed (LIO and other users keep the upstream cloud).
+- The driver sends the data type to the lidar at each start, so a launch with the standard config restores the
+  Cartesian format.
+
+Checked on a Mid-360 (2026-10-29), indoors and outdoors (two static bags of 38 s and 49 s): both topics at 10 Hz with
+the same stamps and point counts, the returns identical, and every depth-0 point of `livox/lidar` at the given range
+(±1 mm) in the second cloud, within the sensor's vertical FOV (−7.5° to 53.3°).
+
+Caveats: depth 0 is also used for points outside a configured FOV (`fov_cfg_en`), and dark, specular or very thin
+targets may not return either; both become free rays in the second cloud. Record bags in mcap
+(`ros2 bag record -s mcap`): with sqlite3 and the two clouds (~10 MB/s) the recorder dropped IMU messages.
+
 ## 1. Preparation
 
 ### 1.1 OS requirements

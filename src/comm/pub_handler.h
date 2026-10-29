@@ -48,6 +48,7 @@ class LidarPubHandler {
   void PointCloudProcess(RawPacket& pkt);
   void SetLidarsExtParam(LidarExtParameter param);
   void GetLidarPointClouds(std::vector<PointXyzlt>& points_clouds);
+  void GetFullPointClouds(std::vector<PointXyzlt>& points_clouds);  // see SetNoReturnRange
 
   uint64_t GetRecentTimeStamp();
   uint32_t GetLidarPointCloudsSize();
@@ -60,6 +61,7 @@ class LidarPubHandler {
   void ProcessSphericalPoint(RawPacket & pkt);
   void ProcessDoubleEchoPoint(RawPacket& pkt);
   std::vector<PointXyzlt> points_clouds_;
+  std::vector<PointXyzlt> full_points_;  // points_clouds_ with the no-return shots at no_return_range
   ExtParameterDetailed extrinsic_ = {
     {0, 0, 0},
     {
@@ -132,6 +134,14 @@ class PubHandler {
 };
 
 PubHandler &pub_handler();
+
+// No-return shots of the spherical format (pcl_data_type 3): the lidar sends them as (0, theta, phi) (Mid-360 user
+// manual v1.2, p. 15). With range_m > 0 a second cloud is built per frame, equal to the normal one but with these
+// shots at range_m along their ray (open sky as free space for a planner map), and handed to the callback; the
+// normal cloud and its topic are never changed. range_m = 0 (default): nothing is built, upstream behaviour.
+using FullCloudCallback = std::function<void(const StoragePacket&)>;
+void SetNoReturnRange(double range_m);
+void SetFullCloudCallback(FullCloudCallback cb);  // set before the lidar starts (not synchronized)
 
 }  // namespace livox_ros
 

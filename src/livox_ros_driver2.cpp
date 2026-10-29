@@ -32,6 +32,7 @@
 #include "include/ros_headers.h"
 #include "driver_node.h"
 #include "lddc.h"
+#include "comm/pub_handler.h"
 #include "lds_lidar.h"
 
 using namespace livox_ros;
@@ -137,6 +138,7 @@ DriverNode::DriverNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter("user_config_path", "path_default");
   this->declare_parameter("cmdline_input_bd_code", "000000000000001");
   this->declare_parameter("lvx_file_path", "/home/livox/livox_test.lvx");
+  this->declare_parameter("no_return_range", 0.0);  // m, see SetNoReturnRange (needs pcl_data_type 3)
 
   this->get_parameter("xfer_format", xfer_format);
   this->get_parameter("multi_topic", multi_topic);
@@ -144,6 +146,8 @@ DriverNode::DriverNode(const rclcpp::NodeOptions & node_options)
   this->get_parameter("publish_freq", publish_freq);
   this->get_parameter("output_data_type", output_type);
   this->get_parameter("frame_id", frame_id);
+  double no_return_range = 0.0;
+  this->get_parameter("no_return_range", no_return_range);
 
   if (publish_freq > 100.0) {
     publish_freq = 100.0;
@@ -158,6 +162,12 @@ DriverNode::DriverNode(const rclcpp::NodeOptions & node_options)
   /** Lidar data distribute control and lidar data source set */
   lddc_ptr_ = std::make_unique<Lddc>(xfer_format, multi_topic, data_src, output_type, publish_freq, frame_id);
   lddc_ptr_->SetRosNode(this);
+  SetNoReturnRange(no_return_range);
+  if (no_return_range > 0.0) {
+    SetFullCloudCallback([this](const StoragePacket& pkg) { lddc_ptr_->PublishFullCloud(pkg); });
+    DRIVER_INFO(*this, "livox/lidar_with_no_return: no-return shots at %.1f m along their ray "
+                "(spherical pcl_data_type 3 only); livox/lidar unchanged", no_return_range);
+  }
 
   if (data_src == kSourceRawLidar) {
     DRIVER_INFO(*this, "Data Source is raw lidar.");
